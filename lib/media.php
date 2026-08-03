@@ -35,6 +35,31 @@ final class MediaGen
     /** Base noise grid; scaled up to the full canvas for the colour fields. */
     private const BASE = 24;
 
+    /**
+     * Interpolation used to blow that grid up, and it is deliberately not
+     * IMG_BICUBIC.
+     *
+     * The promise this generator makes is "same seed, same pixels on every
+     * server", and bicubic cannot keep it: GD's bicubic *upscaler* is missing
+     * from some builds, where imagescale() simply returns false. Measured on
+     * two hosts of the same generation — GD 2.1.0 (cPanel's bundled build)
+     * scales up fine, GD 2.3.3 (AlmaLinux 8's system libgd) fails every single
+     * upscale, at any size, with memory to spare. The failure looks like a
+     * memory problem and is not one.
+     *
+     * So the choice is between an interpolation that exists everywhere and a
+     * marginally smoother one that silently splits fixtures into two
+     * incomparable families. IMG_BILINEAR_FIXED is available in every GD build
+     * PHP 8 ships with, and the difference it makes to the encoded result is
+     * within noise: a `medium` fixture built with it lands at 508 MB against
+     * the 507 MB of the bicubic runs these profiles were calibrated on.
+     *
+     * Fixtures generated before this was pinned carry a different
+     * `pixels_hash` on hosts where bicubic worked; rebuild them before
+     * comparing across servers.
+     */
+    private const SCALER = IMG_BILINEAR_FIXED;
+
     private string $lastPixelHash = '';
 
     public function __construct(
@@ -209,10 +234,10 @@ final class MediaGen
         return $colors;
     }
 
-    /** Low-frequency colour fields: tiny noise grid scaled up with bicubic. */
+    /** Low-frequency colour fields: a tiny noise grid scaled up. */
     private function base(int $width, int $height, string $style, array $palette, Rng $rng)
     {
-        // Flat graphics get a flat ground. A bicubic-scaled noise grid produces
+        // Flat graphics get a flat ground. An interpolated noise grid produces
         // thousands of subtly different colours, which is invisible in a JPEG
         // and catastrophic in a PNG — lossless encoding has to store every one.
         if ($style === 'graphic' || $style === 'screenshot') {
@@ -234,12 +259,15 @@ final class MediaGen
             }
         }
 
-        $big = imagescale($small, $width, $height, IMG_BICUBIC);
+        $big = imagescale($small, $width, $height, self::SCALER);
         imagedestroy($small);
 
         if ($big === false) {
-            // imagescale can fail on very large targets under a low memory_limit.
-            throw new RuntimeException("imagescale failed for {$width}x{$height}; raise PHP memory_limit");
+            throw new RuntimeException(
+                "imagescale failed for {$width}x{$height}. The usual cause is a low "
+                . "PHP memory_limit: GD holds both buffers at once, so a 4800x3600 "
+                . "target needs about 140 MB on its own."
+            );
         }
         return $big;
     }
