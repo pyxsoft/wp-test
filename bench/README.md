@@ -66,16 +66,30 @@ sub-resources is exactly where Early Hints should show a measurable win, and a
 
 Two, and they must not be mixed in one table:
 
-1. **Panel vs panel** — CorePanel vs cPanel vs Plesk. Same fixture, same VM
-   spec, whatever each panel installs by default. This measures the product.
-2. **Web server vs web server** — corehttpd vs nginx, Apache, LiteSpeed,
-   OpenLiteSpeed, Caddy. Same fixture, same box, same PHP-FPM, swapping only the
-   server in front. This measures the engine, and it is the cleaner experiment
-   of the two: one variable, no panel differences to argue about.
+1. **Control panel vs control panel** — same fixture, same VM spec, whatever
+   each panel installs by default. This measures the *product*, and most of what
+   it measures is defaults: PHP handler, opcache, MPM. Say which defaults you
+   left alone, because that is what the number is really about.
+2. **Web server vs web server** — same fixture, same box, same PHP-FPM, swapping
+   only the server in front. This measures the *engine*, and it is the cleaner
+   experiment of the two: one variable, and no packaging differences to argue
+   about.
 
 Axis 2 is where the fixture pays off most, because everything except the server
 can be held identical — including the PHP-FPM pool, which should be the *same
 running pool* wherever possible so that PHP is provably not the variable.
+
+Two rules that are about honesty rather than legality, though they help with
+both:
+
+- **Tune the other side before you compare against it.** A panel left at its
+  defaults may be running PHP through CGI with no opcache; measuring that
+  against a tuned stack produces a number that is true and useless. Report the
+  default *and* the tuned configuration, and headline the tuned one.
+- **Results carry hostnames.** `wp-test-manifest.json` records `site.url`, and
+  load-generator output usually embeds the target host too. Strip them before
+  publishing or committing results — what you are comparing is configurations,
+  not somebody's server.
 
 ## Planned harnesses
 
