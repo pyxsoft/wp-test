@@ -1,0 +1,6 @@
+# Nothing generated belongs in the repository — that is the whole point of
+# building the fixture in place.
+dist/
+*.tar.gz
+*.tgz
+wp-test-manifest.json
