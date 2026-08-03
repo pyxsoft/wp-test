@@ -1,0 +1,41 @@
+# Plugin pack for the `agency` profile.
+#
+# One plugin per line, `slug` or `slug=version`. Slugs are wordpress.org slugs,
+# exactly what `wp plugin install` takes. Lines starting with # are ignored.
+#
+# All of these are free. Elementor Pro and other paid plugins are deliberately
+# absent: a fixture nobody else can rebuild is not a benchmark.
+#
+# On pinning: leaving a plugin unpinned installs the current release, which is
+# reproducible *today* but not next year. Whatever you use, the manifest records
+# the exact versions that were installed, so a result can always state what it
+# ran against. To pin, copy the versions out of a manifest into this file.
+
+# The page builder itself, plus the two add-ons almost every Elementor site has.
+# Between them they register a lot of hooks and widgets — that is the point.
+elementor
+header-footer-elementor
+essential-addons-for-elementor-lite
+
+# SEO: rewrites titles and injects meta on every request, one of the heaviest
+# per-request costs on a typical site.
+wordpress-seo
+
+# Forms, mail and redirects — unremarkable, ubiquitous, and each one hooks init.
+contact-form-7
+wp-mail-smtp
+redirection
+
+# Backup plugin: the classic "dead weight" that loads on every request and does
+# nothing for the visitor.
+updraftplus
+
+# Wordfence is the other classic, and it is genuinely heavy — but it is left out
+# on purpose: its firewall counts requests and will start rate-limiting or
+# blocking the load generator mid-run, which silently corrupts the numbers.
+# Enable it only for a scenario specifically about security-plugin overhead, and
+# whitelist the runner first.
+# wordfence
+
+# No caching plugin here, by design: the fixture must measure the server stack,
+# not a WordPress cache. See BENCHMARK-PLAN.md §7 for the variant that adds one.

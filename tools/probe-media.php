@@ -72,7 +72,7 @@ for ($i = 0; $i < $count; $i++) {
         $w . 'x' . $height,
         $bytes / 1048576,
         $elapsed,
-        $gen->pixelHash($path)
+        $gen->lastPixelHash()
     );
 }
 

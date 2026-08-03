@@ -28,7 +28,21 @@ cd wp-test
 |----------|---------|---------|------------------|-----------|------------|
 | `small`  | 50 MB   | 25 posts, 45 originals | 261 | 40 s | Smoke tests, validating a harness |
 | `medium` | 507 MB  | 400 posts, 2500 comments, 145 originals | 1077 | 4 min | Cache, WebP, Early Hints, bandwidth |
+| `agency` | 140 MB  | 30 Elementor pages (2400 widgets), 8 plugins, 120 posts | 459 | 2 min | PHP render cost, opcache, FPM, per-account CPU |
 | `heavy`  | ~3.4 GB | 1500 posts, 480 large originals, 5000 products, 2000 orders | ~3500 | ~45 min | PHP-FPM, MySQL, uncacheable pages |
+
+The three big ones load different parts of the machine on purpose: `medium` the
+disk and the network, `heavy` the database, `agency` the interpreter. Mixing
+them into one fixture would blur which of the three a result is about.
+
+**`agency` in particular** carries a page builder and the plugin pack a real
+agency site accumulates — SEO, forms, redirects, backups, builder add-ons — each
+hooking into every request. Its pages live in Elementor's `_elementor_data` JSON
+and are rebuilt on every uncached hit. Measured against an ordinary post from
+the same fixture: **+36 % TTFB and 2.6× the HTML**. Elementor Pro is deliberately
+absent (paid, unpinnable); the free plugin's widgets are enough to load the
+renderer. Pin plugin versions in `profiles/agency.plugins` — the manifest always
+records the versions actually installed.
 
 `small` and `medium` are measured (2–3 workers on a modest VM); `heavy` is
 extrapolated from a reduced run of the same profile, so treat its numbers as an
@@ -79,14 +93,16 @@ does not depend on images 1–899 — that is what allows parallel workers.
 
 Two guarantees, and one honest caveat:
 
-- **Same seed, same pixels.** The manifest's `pixels_hash` is computed from
-  decoded pixels and should match across servers.
+- **Same seed, same pixels.** The manifest's `pixels_hash` is computed from the
+  generated pixels, sampled on a fixed grid before encoding, and should match
+  across servers.
 - **Same seed, same content.** Titles, bodies, dates, prices and comments are
   identical between runs.
 - **JPEG bytes may differ by a fraction of a percent** between servers running
-  different libjpeg versions. That is why the manifest hashes pixels rather than
-  files — hashing files would report drift that does not exist. Compare
-  `pixels_hash`, not `md5sum`.
+  different libjpeg versions, and so may the pixels you get back from decoding
+  them. That is exactly why the hash is taken before the encoder runs: it
+  answers "did both servers draw the same thing" without the answer depending on
+  a library version. Compare `pixels_hash`, never `md5sum` of the files.
 
 `--workers > 1` permutes attachment IDs, since the shards insert concurrently.
 The content is the same either way; use `--workers 1` when you need two
@@ -138,10 +154,13 @@ lib/rng.php           Deterministic PRNG with derivable sub-streams
 lib/media.php         GD image generator
 lib/text.php          Deterministic editorial text
 lib/config.php        Profile loading, fixed clock, shard handling
+lib/elementor.php     Deterministic Elementor document builder
 steps/20-media.php    Media library and thumbnails
 steps/30-content.php  Taxonomies, pages, posts, comments, menus
 steps/40-woocommerce.php  Catalogue and orders
+steps/50-elementor.php    Builder pages (agency profile)
 steps/90-manifest.php     Measure and record what was built
+tools/probe-media.php Calibrate image size/time without building a site
 bench/                Benchmark harnesses (see bench/README.md)
 ```
 

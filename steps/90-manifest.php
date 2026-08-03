@@ -69,6 +69,27 @@ if (is_readable($stateDir . '/content.json')) {
     $content = json_decode((string) file_get_contents($stateDir . '/content.json'), true) ?: [];
 }
 
+$elementor = [];
+if (is_readable($stateDir . '/elementor.json')) {
+    $elementor = json_decode((string) file_get_contents($stateDir . '/elementor.json'), true) ?: [];
+    // The per-page listing is useful while building but noise in a manifest.
+    unset($elementor['documents']);
+}
+
+// Plugin versions, not just slugs. A plugin pack that resolves to different
+// versions on the two servers being compared is a difference that has to be
+// visible before anyone quotes a number.
+if (!function_exists('get_plugin_data')) {
+    require_once ABSPATH . 'wp-admin/includes/plugin.php';
+}
+$plugins = [];
+foreach ((array) get_option('active_plugins', []) as $file) {
+    $slug = dirname($file) !== '.' ? dirname($file) : basename($file, '.php');
+    $data = @get_plugin_data(WP_PLUGIN_DIR . '/' . $file, false, false);
+    $plugins[$slug] = $data['Version'] ?? '?';
+}
+ksort($plugins);
+
 /* -------------------------------------------------------------- measurements */
 
 $uploadDir = wp_upload_dir();
@@ -125,10 +146,7 @@ $manifest = [
         'wp_version'   => get_bloginfo('version'),
         'php_version'  => PHP_VERSION,
         'theme'        => (string) wp_get_theme()->get('Name'),
-        'plugins'      => array_values(array_map(
-            static fn(string $p): string => dirname($p) !== '.' ? dirname($p) : $p,
-            (array) get_option('active_plugins', [])
-        )),
+        'plugins'      => $plugins,
         'image_sizes'  => $sizes,
     ],
     'content' => $content + [
@@ -137,6 +155,7 @@ $manifest = [
         'orders'      => $woo['orders'],
     ],
     'media_by_format' => $byFormat,
+    'elementor'       => $elementor,
     'rows' => $rowCounts,
     'post_types' => $postTypes,
     'disk' => [
@@ -168,6 +187,11 @@ printf("  formats      %d jpeg (%.1f MB), %d png (%.1f MB)\n",
 if ($woo['products']) {
     printf("  woocommerce  %d products, %d orders\n", $woo['products'], $woo['orders']);
 }
+if (!empty($elementor['pages'])) {
+    printf("  elementor    %d pages, %d widgets, %.0f KB of document JSON\n",
+        $elementor['pages'], $elementor['widgets'] ?? 0, ($elementor['data_bytes'] ?? 0) / 1024);
+}
+printf("  plugins      %d active: %s\n", count($plugins), implode(', ', array_keys($plugins)));
 printf("  uploads      %.1f MB\n", $uploadBytes / 1048576);
 printf("  database     %.1f MB (%d posts rows, %d postmeta rows)\n",
     $dbBytes / 1048576, $rowCounts['posts'], $rowCounts['postmeta']);

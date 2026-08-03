@@ -88,7 +88,7 @@ Options:
   --theme SLUG         Theme to install and activate (default: WordPress's own)
   --workers N          Parallel workers for image and product generation
                        (default: cores-1, capped at 8)
-  --only STEPS         Comma-separated subset: media,content,woo,manifest
+  --only STEPS         Comma-separated subset: media,content,woo,elementor,manifest
   --skip-core          Site is already installed; only generate content
   --php PATH           PHP CLI binary to use (default: autodetected)
   --wp PATH            wp-cli binary to use (default: autodetected, else
@@ -231,6 +231,67 @@ want_step() {
   [[ ",$ONLY," == *",$1,"* ]]
 }
 
+# Install the profile's plugin pack, if it declares one.
+#
+# A plugin that fails to install is reported and skipped rather than fatal: a
+# slug can be renamed or a pinned version pulled from wordpress.org, and losing
+# a whole build to one missing plugin helps nobody. What must not happen is a
+# silent difference between the two servers being compared — hence the summary
+# at the end, and the versions recorded in the manifest.
+install_plugin_pack() {
+  local pack="${PLUGIN_PACK:-}"
+  [[ -z "$pack" ]] && return 0
+
+  local pack_file="$pack"
+  [[ -f "$pack_file" ]] || pack_file="$ROOT/profiles/$pack"
+  [[ -f "$pack_file" ]] || die "plugin pack not found: $pack"
+
+  info "installing plugin pack ($(basename "$pack_file"))"
+
+  local -a failed=()
+  local entry slug version count=0
+
+  while IFS= read -r entry || [[ -n "$entry" ]]; do
+    entry="${entry%%#*}"
+    entry="$(printf '%s' "$entry" | tr -d '[:space:]')"
+    [[ -z "$entry" ]] && continue
+
+    slug="${entry%%=*}"
+    version="${entry#*=}"
+    [[ "$version" == "$slug" ]] && version=""
+
+    if [[ -n "$version" ]]; then
+      if wp plugin install "$slug" --version="$version" --activate --force >/dev/null 2>&1; then
+        count=$((count + 1))
+      else
+        failed+=("$slug=$version")
+      fi
+    else
+      if wp plugin install "$slug" --activate --force >/dev/null 2>&1; then
+        count=$((count + 1))
+      else
+        failed+=("$slug")
+      fi
+    fi
+  done < "$pack_file"
+
+  info "activated $count plugins"
+
+  if [[ ${#failed[@]} -gt 0 ]]; then
+    warn "these plugins could not be installed: ${failed[*]}"
+    warn "the fixture is still usable, but the other side of a comparison must"
+    warn "be missing exactly the same ones — check both manifests before measuring"
+  fi
+
+  # Silence the setup wizards that would otherwise redirect or nag. They do not
+  # affect the front end, but they make the admin unusable for a human checking
+  # the fixture by hand.
+  wp option delete elementor_onboarded >/dev/null 2>&1 || true
+  wp option update elementor_disable_typography_schemes yes >/dev/null 2>&1 || true
+  wp option update wpseo_flush_rewrite '' >/dev/null 2>&1 || true
+  wp transient delete --all >/dev/null 2>&1 || true
+}
+
 # --------------------------------------------------------------------- setup --
 
 [[ -n "$SITE_PATH" ]] || { usage; die "--path is required"; }
@@ -342,7 +403,12 @@ SQL
     --extra-php <<'PHP' >/dev/null
 // Benchmarks measure the server, not WordPress's debug machinery.
 define( 'WP_DEBUG', false );
-define( 'DISABLE_WP_CRON', false );
+// wp-cron off, and this one is not cosmetic: with it on, requests fire a
+// loopback HTTP call back into the same server at unpredictable moments. That
+// adds variance to every latency measurement, and on a single-worker server it
+// deadlocks outright — the server waits on a request only it can serve.
+// Turn it back on only for a scenario specifically about cron handling.
+define( 'DISABLE_WP_CRON', true );
 define( 'AUTOMATIC_UPDATER_DISABLED', true );
 define( 'WP_AUTO_UPDATE_CORE', false );
 // Post revisions would multiply wp_posts by an amount that varies with how the
@@ -383,6 +449,11 @@ else
   log "step 10 — skipped (--skip-core)"
   [[ -f "$SITE_PATH/wp-load.php" ]] || die "--skip-core was given but $SITE_PATH holds no WordPress install"
 fi
+
+# Outside the install block on purpose: with --skip-core the plugins still have
+# to be there, or step 50 silently finds no Elementor and produces a fixture
+# that looks fine and measures nothing.
+install_plugin_pack
 
 # ---------------------------------------------------- shared step environment --
 
@@ -436,6 +507,16 @@ if want_step woo && [[ "${WOO_ENABLED:-0}" == "1" ]]; then
   log "step 40 — WooCommerce (${WOO_PRODUCTS} products, ${WOO_ORDERS} orders)"
   run_sharded "$ROOT/steps/40-woocommerce.php" "woo" "$WORKERS" || die "woocommerce step failed"
   ok "woocommerce done"
+fi
+
+# -------------------------------------------------------------- 50 — elementor --
+
+if want_step elementor && [[ "${ELEMENTOR_PAGES:-0}" -gt 0 ]]; then
+  log "step 50 — Elementor pages (${ELEMENTOR_PAGES}, ${ELEMENTOR_MIN_SECTIONS}-${ELEMENTOR_MAX_SECTIONS} sections each)"
+  info "these render from a JSON document on every uncached request — this is"
+  info "the profile's PHP cost, and it does not show up in the disk figure"
+  WP_TEST_SHARD="1/1" wp eval-file "$ROOT/steps/50-elementor.php" || die "elementor step failed"
+  ok "elementor done"
 fi
 
 # --------------------------------------------------------------- 90 — manifest --

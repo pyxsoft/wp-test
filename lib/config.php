@@ -41,11 +41,24 @@ final class Config
 
         // Environment wins over the file, so a run can be tweaked without
         // editing (and then accidentally committing) a profile.
-        foreach ($values as $key => $_) {
-            $override = getenv('WP_TEST_' . $key);
-            if ($override !== false && $override !== '') {
-                $values[$key] = is_numeric($override) ? $override + 0 : $override;
+        //
+        // Any WP_TEST_<KEY> is honoured, including keys the profile does not
+        // define — otherwise WP_TEST_ELEMENTOR_PAGES on a profile without that
+        // line would be ignored in silence, which is the worst way to find out.
+        $control = [
+            'PROFILE' => true, 'SEED' => true, 'EPOCH' => true,
+            'STATE_DIR' => true, 'SHARD' => true, 'SHARD_LABEL' => true,
+        ];
+
+        foreach (getenv() as $name => $value) {
+            if (strpos($name, 'WP_TEST_') !== 0 || $value === '') {
+                continue;
             }
+            $key = substr($name, strlen('WP_TEST_'));
+            if (isset($control[$key])) {
+                continue;
+            }
+            $values[$key] = is_numeric($value) ? $value + 0 : $value;
         }
 
         return new self($values);

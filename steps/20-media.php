@@ -144,7 +144,7 @@ for ($i = 0; $i < $total; $i++) {
         'style'  => $style,
         'format' => $format,
         'bytes'  => $bytes,
-        'pixels' => $gen->pixelHash($path),
+        'pixels' => $gen->lastPixelHash(),
     ];
 
     $bytesTotal += $bytes;

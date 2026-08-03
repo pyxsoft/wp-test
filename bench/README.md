@@ -33,6 +33,26 @@ experience; report both rather than picking the flattering one.
 format. Changing two at once and reporting the delta is how benchmarks end up
 meaning nothing.
 
+## The `agency` profile as a workload
+
+`agency` exists to compare **servers and panels**, not to study Elementor.
+Elementor is the load generator: it produces the traffic shape that separates
+web servers most sharply, and it does it the way a real customer site does.
+
+What it puts under stress that the other profiles do not:
+
+| Property of a builder page | What it exercises in the server |
+|---|---|
+| 30-80 CSS/JS assets per page | HTTP/2-3 multiplexing, connection handling, static delivery |
+| Per-page CSS generated on first hit | Cold-cache behaviour, write path, cache warm-up |
+| 235 KB of HTML per page | Compression (brotli vs gzip), buffering, TTFB vs full-load |
+| Rebuilt from JSON on every miss | PHP-FPM pool, opcache, per-account CPU limits |
+| Assets known before the HTML is ready | **Early Hints** — the one place a 103 pays off most |
+
+That last row is the interesting one for CorePanel: a page with dozens of
+sub-resources is exactly where Early Hints should show a measurable win, and a
+`small` fixture with three assets would show nothing either way.
+
 ## What to measure
 
 - TTFB and full-load percentiles (p50/p95/p99) — never averages alone
@@ -41,6 +61,21 @@ meaning nothing.
 - Bytes on the wire per page view (this is where WebP and compression show up)
 - CPU seconds and peak RSS per request, server-side
 - Cache hit ratio, reported next to every HTML latency number
+
+## Axes of comparison
+
+Two, and they must not be mixed in one table:
+
+1. **Panel vs panel** — CorePanel vs cPanel vs Plesk. Same fixture, same VM
+   spec, whatever each panel installs by default. This measures the product.
+2. **Web server vs web server** — corehttpd vs nginx, Apache, LiteSpeed,
+   OpenLiteSpeed, Caddy. Same fixture, same box, same PHP-FPM, swapping only the
+   server in front. This measures the engine, and it is the cleaner experiment
+   of the two: one variable, no panel differences to argue about.
+
+Axis 2 is where the fixture pays off most, because everything except the server
+can be held identical — including the PHP-FPM pool, which should be the *same
+running pool* wherever possible so that PHP is provably not the variable.
 
 ## Planned harnesses
 

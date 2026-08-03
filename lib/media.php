@@ -35,6 +35,8 @@ final class MediaGen
     /** Base noise grid; scaled up to the full canvas for the colour fields. */
     private const BASE = 24;
 
+    private string $lastPixelHash = '';
+
     public function __construct(
         private int $quality = 88,
         private int $detail = 14
@@ -88,6 +90,12 @@ final class MediaGen
             imagedestroy($img);
             throw new RuntimeException("cannot write image: $path");
         }
+
+        // Hash before releasing the image. Reading the file back and decoding it
+        // again would cost as much as drawing it did, on the slowest step of the
+        // whole build.
+        $this->lastPixelHash = $this->hashImage($img);
+
         imagedestroy($img);
 
         clearstatcache(true, $path);
@@ -95,11 +103,25 @@ final class MediaGen
     }
 
     /**
-     * Checksum of the pixels, not of the file.
+     * Pixel hash of the image most recently written by write().
      *
-     * Byte-level JPEG output can differ slightly between libjpeg versions, so
-     * hashing the file would report false drift across servers. Sampling the
-     * decoded pixels verifies what we actually promise: same seed, same image.
+     * Taken from the in-memory image, before encoding. That is deliberate and
+     * it is the value the manifest reports: it answers "did the generator draw
+     * the same thing on both servers?" without dragging in the encoder. Hashing
+     * the saved JPEG instead would make the answer depend on the server's
+     * libjpeg version and report drift where the generator agreed perfectly.
+     */
+    public function lastPixelHash(): string
+    {
+        return $this->lastPixelHash;
+    }
+
+    /**
+     * Checksum of the pixels of a file already on disk.
+     *
+     * Note this is NOT the same value as lastPixelHash(): this one decodes the
+     * saved file, so for a JPEG it includes the losses of the encode. Use it to
+     * inspect an existing file; use lastPixelHash() to compare two builds.
      */
     public function pixelHash(string $path): string
     {
@@ -112,6 +134,20 @@ final class MediaGen
         if ($img === false) {
             return '';
         }
+        $hash = $this->hashImage($img);
+        imagedestroy($img);
+        return $hash;
+    }
+
+    /**
+     * Sample the pixels on a fixed grid and hash them.
+     *
+     * Sampled rather than exhaustive: a full 4800x3600 read in PHP would take
+     * longer than drawing the image, and a 64x64 grid already catches any real
+     * divergence between two builds.
+     */
+    private function hashImage($img): string
+    {
         $w = imagesx($img);
         $h = imagesy($img);
         $ctx = hash_init('sha256');
@@ -123,7 +159,6 @@ final class MediaGen
             }
             hash_update($ctx, $row);
         }
-        imagedestroy($img);
         return substr(hash_final($ctx), 0, 16);
     }
 
