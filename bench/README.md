@@ -53,6 +53,100 @@ That last row is the interesting one for CorePanel: a page with dozens of
 sub-resources is exactly where Early Hints should show a measurable win, and a
 `small` fixture with three assets would show nothing either way.
 
+## What a repeated GET cannot measure
+
+A load generator answers one question well — how much traffic the machine takes
+before it falls over — and is structurally incapable of answering the one that
+matters to a visitor. Three reasons, each fatal on its own:
+
+- **Early Hints require a client that acts on a 103.** curl, wrk and k6 receive
+  the interim response and ignore it. The entire benefit is that the browser
+  starts fetching CSS *before* the HTML exists; a client that fetches nothing
+  extra measures exactly zero improvement, no matter how well the server works.
+- **WebP requires content negotiation.** Conversion happens because the client
+  sent `Accept: image/webp`. A load generator does not, unless told to.
+- **A page is not a request.** Optimisations change how many requests a page
+  needs and how many bytes they carry. Hitting one URL in a loop never sees it.
+
+So there are two harnesses, and they answer different questions. Keep their
+numbers in separate tables.
+
+| Question | Tool | Metrics |
+|---|---|---|
+| What does a visitor experience? | Headless browser | TTFB, FCP, LCP, requests, bytes, waterfall |
+| How much load does it take? | k6 / wrk | req/s, p95 under concurrency, error rate |
+| What does it cost the server? | Server-side sampling | **CPU-seconds per page**, RSS |
+
+## How the three optimisations actually work
+
+They are not three versions of "faster". Each attacks a different part of the
+page load, which is why they have to be measured separately before being
+measured together.
+
+**Early Hints tapes over PHP's thinking time.** The browser cannot request the
+stylesheet until the HTML arrives. If WordPress needs 400 ms to build the page,
+that is 400 ms of a browser sitting idle. The 103 goes out immediately, turning
+the wait into downloads. The ceiling on the win is therefore *the generation
+time itself* — not a function of network latency. Which means the heavier the
+site, the more there is to gain, and measuring this on a trivial page will
+correctly report "no difference".
+
+**WebP removes bytes.** The LCP element of a WordPress page is usually an image;
+a smaller image paints sooner. This is the one optimisation whose benefit scales
+with the visitor's bandwidth rather than with server speed, so it needs
+throughput emulation to show its real shape. It also has a cold cost — the first
+request pays for the conversion — which the variant cache then amortises.
+
+**The dynamic cache removes the work.** On a hit there is no PHP at all: TTFB
+collapses and CPU per page drops to a fraction.
+
+### The interaction to get ahead of
+
+A reviewer will notice this, so state it first: **the dynamic cache shrinks the
+window Early Hints exploits.** On a cache hit the HTML arrives almost
+immediately, so there is no dead time left to cover. That is not a
+contradiction; they cover different situations, and the honest framing is:
+
+| Situation | What helps |
+|---|---|
+| Cache hit | Dynamic cache — TTFB near zero, CPU near zero |
+| Cache miss, first visit | Early Hints — covers the whole generation |
+| **Uncacheable page** (cart, checkout, search, logged-in) | **Early Hints only** — no cache can help here |
+
+That last row is the strongest and least obvious argument: on the pages no cache
+can rescue, the 103 is the only thing left. They are also the pages that hurt
+most in a shop.
+
+### Measurement matrix
+
+On the `agency` profile, since it has both a long generation time and many
+assets:
+
+| # | Configuration | What it demonstrates |
+|---|---|---|
+| S1 | everything off | Baseline |
+| S2 | + WebP | Bytes and LCP, at several bandwidths |
+| S3 | + Early Hints | How much of the PHP window is recovered |
+| S4 | + WebP + Early Hints | **The real default** of the free tier |
+| S5 | + dynamic cache, **hit** | TTFB floor and CPU collapse |
+| S6 | dynamic cache **miss**, all on | The realistic mixed case |
+| S7 | **uncacheable** page, all on | Where Early Hints is the only help |
+
+Report every scenario in three states, because they are three different truths:
+**cold** (server has not learned its hints yet, no variants cached), **warm
+server** (hints learned, variants cached, browser cache empty — this is what a
+returning visitor's *first* page load looks like), and **warm everything**.
+
+The proof that convinces is not "LCP improved 12 %". It is the waterfall showing
+the stylesheet starting to download 300 ms earlier, next to the same waterfall
+without hints. Save the traces.
+
+### A limit worth stating before someone else does
+
+Early Hints is honoured by Chromium-based browsers and Firefox. **Safari does
+not implement it.** Any claim about it should say so; it still covers most
+traffic, and saying it up front is cheaper than being corrected.
+
 ## What to measure
 
 - TTFB and full-load percentiles (p50/p95/p99) — never averages alone
@@ -91,21 +185,34 @@ both:
   publishing or committing results — what you are comparing is configurations,
   not somebody's server.
 
-## Planned harnesses
+## Harnesses
 
-- `bench/urls.sh` — derive a URL list from a built site (posts, archives,
-  products, uploads) so every tool measures the same paths
-- `bench/load.sh` — driver around a load generator, with warm/cold runs and
-  percentile output
-- `bench/compare.md` — how to run the same profile on two hosts and present the
-  difference honestly
+Written:
+
+- `urls.sh` — derives the URL list from a built site, keeping the classes apart
+- `lowlevel.sh` — header facts: HTTP version, 103, WebP negotiation (JPEG and
+  PNG separately), compression, cache headers
+- `servers/` — nginx and Apache pointed at the same docroot and the same running
+  PHP-FPM pool, so PHP is never the variable
+
+To write:
+
+- `page.js` — headless Chromium (Playwright) collecting TTFB/FCP/LCP, request
+  count, transferred bytes and the full waterfall, N repetitions per scenario,
+  fresh profile each time, with bandwidth emulation for the WebP scenarios.
+  **This is the primary harness**: everything in the matrix above needs a real
+  browser.
+- `cost.sh` — server-side sampling during a run: CPU-seconds attributable to the
+  pool and the web server, peak RSS. This is what "lowers server load" means in
+  numbers, and it is the figure a VPS owner actually cares about.
+- `load.sh` — k6 driver, for capacity only. Deliberately last: it answers a
+  question the others do not, but it cannot see any of the optimisations.
 
 ## Open questions
 
-- Which load generator to standardise on. `wrk` gives clean percentiles but
-  cannot follow a URL list well; `k6` scripts realistically but adds a runtime
-  dependency to the client box. The client must never be the bottleneck —
-  whatever we pick, verify that first.
-- Whether to measure from the same LAN or across the internet. Both are
-  legitimate; they answer different questions and must not be mixed in one
-  table.
+- Load generator for the capacity harness: `wrk` gives clean percentiles but
+  follows a URL list poorly; `k6` scripts realistically at the cost of a runtime
+  on the client box. Verify first that the client is not the bottleneck.
+- Bandwidth profiles for the WebP scenarios. Fibre hides the entire benefit;
+  something mobile-shaped shows it. Pick two, say which they are, never average
+  them together.
