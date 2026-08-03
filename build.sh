@@ -42,6 +42,7 @@ KEEP_STATE=0
 ASSUME_YES=0
 PHP_BIN=""
 WP_BIN=""
+WP_CLI_VERSION=""
 
 STATE_DIR=""
 
@@ -183,23 +184,83 @@ detect_php() {
        GD is what draws the images; install php-gd, or point --php at a build that has it."
 }
 
+# Can PHP run this file as WP-CLI? Sets WP_CLI_VERSION on success.
+#
+# The wrappers below invoke wp-cli as `$PHP_BIN <file> …`, so the file has to be
+# the phar itself. Anything else — most often a shell launcher named `wp` — is
+# read by PHP as plain text, echoed to stdout and exits 0, so the build appears
+# to install WordPress in two seconds and then generates nothing into an empty
+# document root. Hosts that give every account its own PHP (CorePanel, cPanel,
+# Plesk) ship exactly such a launcher, so this is the common case, not an exotic
+# one. Hence: never trust the name, always ask it for its version.
+#
+# Readability is the only file permission that matters here, again because PHP is
+# the one executing it: a packaged phar is often 0644 and works perfectly.
+wp_phar_works() {
+  local candidate="$1"
+  [[ -f "$candidate" && -r "$candidate" ]] || return 1
+
+  local -a flags=(--version --skip-plugins --skip-themes)
+  [[ "$(id -u)" -eq 0 ]] && flags+=(--allow-root)
+
+  local out
+  out="$("$PHP_BIN" -d memory_limit=512M "$candidate" "${flags[@]}" 2>/dev/null)" || return 1
+  [[ "$out" == WP-CLI* ]] || return 1
+  WP_CLI_VERSION="$(printf '%s' "$out" | head -1)"
+}
+
 detect_wp() {
-  if [[ -n "$WP_BIN" ]]; then
-    [[ -x "$WP_BIN" ]] || WP_BIN="$(type -P "$WP_BIN")" || die "no such wp-cli binary: $WP_BIN"
-    return
+  local requested="$WP_BIN"
+  local -a candidates=()
+  local found
+
+  if [[ -n "$requested" ]]; then
+    if [[ -e "$requested" ]]; then
+      candidates+=("$requested")
+    elif found="$(type -P "$requested")"; then
+      candidates+=("$found")
+    else
+      die "no such wp-cli binary: $requested"
+    fi
+  else
+    # Must be type -P: `wp` is also the name of the wrapper function below, and
+    # command -v would return that instead of the executable.
+    found="$(type -P wp || true)"
+    [[ -n "$found" ]] && candidates+=("$found")
+
+    # Where hosting stacks keep the real phar that their `wp` launcher runs.
+    for pattern in \
+        "/opt/corepanel/share/wp-cli/wp-cli.phar" \
+        "/usr/local/bin/wp-cli.phar" \
+        "/usr/share/wp-cli/wp-cli.phar" \
+        "$HOME/wp-cli.phar"; do
+      while IFS= read -r f; do
+        candidates+=("$f")
+      done < <(compgen -G "$pattern" 2>/dev/null || true)
+    done
   fi
 
-  # Must be type -P: `wp` is also the name of the wrapper function below, and
-  # command -v would return that instead of the executable.
-  local found
-  found="$(type -P wp || true)"
-  if [[ -n "$found" ]]; then
-    WP_BIN="$found"
-    return
+  for candidate in "${candidates[@]}"; do
+    if wp_phar_works "$candidate"; then
+      WP_BIN="$candidate"
+      return
+    fi
+  done
+
+  if [[ -n "$requested" ]]; then
+    die "$requested is not a wp-cli phar this PHP can run.
+       wp-test runs wp-cli as '$PHP_BIN <file>', so --wp must point at wp-cli.phar
+       itself, not at a launcher script that picks a PHP of its own. On a hosting
+       panel the phar is usually beside the launcher, e.g.
+       /opt/corepanel/share/wp-cli/wp-cli.phar. Omit --wp to have one downloaded."
   fi
 
   local phar="$STATE_DIR/wp-cli.phar"
-  log "wp-cli not found, downloading it to $phar"
+  if [[ ${#candidates[@]} -gt 0 ]]; then
+    log "the 'wp' in PATH (${candidates[0]}) is not a phar this PHP can run; downloading wp-cli to $phar"
+  else
+    log "wp-cli not found, downloading it to $phar"
+  fi
   local url="https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar"
   if command -v curl >/dev/null 2>&1; then
     curl -fsSL "$url" -o "$phar" || die "cannot download wp-cli"
@@ -208,7 +269,7 @@ detect_wp() {
   else
     die "wp-cli is missing and neither curl nor wget is available to fetch it"
   fi
-  chmod +x "$phar"
+  wp_phar_works "$phar" || die "the downloaded wp-cli does not run under $PHP_BIN"
   WP_BIN="$phar"
 }
 
@@ -322,13 +383,10 @@ trap cleanup EXIT
 detect_php
 detect_wp
 
-# Prove the pair actually runs before doing anything expensive. Without this a
-# broken wp-cli path fails several steps later, with PHP's "Could not open input
-# file" swallowed by a redirect.
-if ! WP_VERSION_OUT="$(wp_nopath --version 2>&1)"; then
-  die "wp-cli does not run: $PHP_BIN $WP_BIN --version
-       $WP_VERSION_OUT"
-fi
+# No separate "does wp-cli run?" probe here: detect_wp only accepts a file that
+# answered `--version` with a WP-CLI banner under this very PHP, which is a
+# stricter proof than a second exit-status check would be. A launcher script
+# passes an exit-status check — PHP prints it as text and returns 0.
 
 if [[ -z "$WORKERS" ]]; then
   cores="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)"
@@ -356,7 +414,7 @@ info "target      ~${TARGET_SIZE_MB} MB"
 info "path        $SITE_PATH"
 info "url         $SITE_URL"
 info "php         $PHP_BIN ($("$PHP_BIN" -r 'echo PHP_VERSION;'))"
-info "wp-cli      $WP_BIN"
+info "wp-cli      $WP_BIN${WP_CLI_VERSION:+ ($WP_CLI_VERSION)}"
 info "workers     $WORKERS"
 info "seed        ${SEED:-20260803 (default)}"
 [[ -n "$ONLY" ]] && info "steps       $ONLY"

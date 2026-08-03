@@ -95,7 +95,10 @@ Two guarantees, and one honest caveat:
 
 - **Same seed, same pixels.** The manifest's `pixels_hash` is computed from the
   generated pixels, sampled on a fixed grid before encoding, and should match
-  across servers.
+  across servers. That is also why the image scaler is pinned to
+  `IMG_BILINEAR_FIXED`: GD's bicubic upscaler is absent from some builds
+  (measured: fine on GD 2.1.0, fails on every upscale with GD 2.3.3), so relying
+  on it would split fixtures into two families that cannot be compared.
 - **Same seed, same content.** Titles, bodies, dates, prices and comments are
   identical between runs.
 - **JPEG bytes may differ by a fraction of a percent** between servers running
@@ -114,7 +117,12 @@ On the machine being benchmarked:
 
 - PHP 8.0+ CLI **with the GD extension** (`php-gd`)
 - MySQL or MariaDB, and a database the account can write to
-- `wp-cli` — downloaded automatically to a temp directory if missing
+- `wp-cli` — downloaded automatically to a temp directory if missing. It has to be
+  the **phar itself**: the build runs it as `php wp-cli.phar …`, so a `wp` in `PATH`
+  that is really a shell launcher (what hosting panels with per-account PHP install)
+  is detected and skipped rather than fed to PHP. Point `--wp` at the phar — often
+  next to the launcher, e.g. `/opt/corepanel/share/wp-cli/wp-cli.phar` — or leave it
+  out and let the build fetch one. The phar does not need to be executable.
 - Network access for the WordPress core download (and WooCommerce on `heavy`)
 
 Run it as the account's own user, never as root: the files have to be owned by
