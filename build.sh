@@ -487,6 +487,14 @@ PHP
     --admin_email="$ADMIN_EMAIL" \
     --skip-email >/dev/null
 
+  # WordPress derives siteurl from the script path when it is installed from the
+  # command line, so a docroot that is not the web root leaves the site
+  # answering on <url>/public_html. Nothing later notices — the generator writes
+  # content happily — and the fixture only reveals it as a redirect on the first
+  # request measured. Say it outright instead.
+  wp option update siteurl "$SITE_URL" >/dev/null
+  wp option update home "$SITE_URL" >/dev/null
+
   # Pretty permalinks: benchmarking index.php?p=1 would measure the wrong thing.
   wp rewrite structure '/%postname%/' --hard >/dev/null 2>&1 || true
   wp option update blog_public 0 >/dev/null
