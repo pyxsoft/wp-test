@@ -194,6 +194,14 @@ Written:
   PNG separately), compression, cache headers
 - `servers/` — nginx and Apache pointed at the same docroot and the same running
   PHP-FPM pool, so PHP is never the variable
+- `benchgen/` — the load generator for comparing servers: HTTP/1.1, HTTP/2 and
+  HTTP/3 with one connection per visitor, reconnecting after a keep-alive limit,
+  percentiles, timeouts counted apart. `-mode hold` keeps N visitors connected
+  and times a newly arriving one — the test that separates a worker-per-connection
+  server from an event-driven one. Its header lists the traps it avoids.
+- `srvstat.py` — server-side sampling during a run: whole-machine CPU-seconds and
+  peak PSS of the web server and of one account's PHP. CPU per request is its
+  `cpu_s` divided by the requests answered in the window.
 
 To write:
 
@@ -202,17 +210,15 @@ To write:
   fresh profile each time, with bandwidth emulation for the WebP scenarios.
   **This is the primary harness**: everything in the matrix above needs a real
   browser.
-- `cost.sh` — server-side sampling during a run: CPU-seconds attributable to the
-  pool and the web server, peak RSS. This is what "lowers server load" means in
-  numbers, and it is the figure a VPS owner actually cares about.
 - `load.sh` — k6 driver, for capacity only. Deliberately last: it answers a
   question the others do not, but it cannot see any of the optimisations.
 
 ## Open questions
 
-- Load generator for the capacity harness: `wrk` gives clean percentiles but
-  follows a URL list poorly; `k6` scripts realistically at the cost of a runtime
-  on the client box. Verify first that the client is not the bottleneck.
+- Load generator for page-level capacity (a URL list, not one URL): `benchgen`
+  hits one URL per run. `k6` scripts realistically at the cost of a runtime on
+  the client box. Whatever runs it, verify first that the client is not the
+  bottleneck.
 - Bandwidth profiles for the WebP scenarios. Fibre hides the entire benefit;
   something mobile-shaped shows it. Pick two, say which they are, never average
   them together.
